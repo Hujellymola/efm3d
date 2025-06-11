@@ -81,6 +81,9 @@ class EVLTrain(EVL):
             det_thresh,
             yaw_max,
         )
+        # Initialize metrics
+        self.iou_thres = 0.2  # Default IOU threshold for metrics
+        self.reset_metrics()
 
     def compute_losses(self, outputs, batch):
         total_loss = 0
@@ -698,6 +701,7 @@ class EVLTrain(EVL):
         return log_ims
 
     def reset_metrics(self):
+        print("Resetting metrics...")
         self.metrics = {}
 
         # obb
@@ -710,27 +714,90 @@ class EVLTrain(EVL):
         self.metrics["mesh/prec"] = []
         self.metrics["mesh/recall"] = []
 
+    # def update_metrics(self, outputs, batch):
+    #     # don't compute metrics on training since it takes long to compute.
+    #     if self.training:
+    #         return
+    #     print("Updating metrics...")
+    #     obbs_pred = outputs[ARIA_OBB_PRED]
+    #     T_wv = outputs["voxel/T_world_voxel"]
+    #     obbs_gt = get_gt_obbs(batch, self.ve, T_wv)
+    #     precs, recs = [], []
+    #     for obbs_pred_s, obbs_gt_s in zip(obbs_pred, obbs_gt):
+    #         prec, rec, _ = prec_recall_bb3(
+    #             obbs_pred_s.remove_padding(),
+    #             obbs_gt_s.remove_padding(),
+    #             iou_thres=self.iou_thres,
+    #         )
+
+    #         if prec != -1.0 and rec != -1.0:
+    #             precs.append(prec)
+    #             recs.append(rec)
+    #     self.metrics[f"precision@{self.iou_thres}"].extend(precs)
+    #     self.metrics[f"recall@{self.iou_thres}"].extend(recs)
+    
     def update_metrics(self, outputs, batch):
         # don't compute metrics on training since it takes long to compute.
         if self.training:
             return
-
+        # print("Updating metrics...")
+        # # Check if required keys exist in outputs
+        # if ARIA_OBB_PRED not in outputs:
+        #     print(f"Warning: {ARIA_OBB_PRED} not in outputs. Keys: {list(outputs.keys())}")
+        #     return 
+        # if "voxel/T_world_voxel" not in outputs:
+        #     print("Warning: voxel/T_world_voxel not in outputs")
+        #     return
+        
         obbs_pred = outputs[ARIA_OBB_PRED]
         T_wv = outputs["voxel/T_world_voxel"]
-        obbs_gt = get_gt_obbs(batch, self.ve, T_wv)
+        
+        # Check if there are any ground truth objects
+        try:
+            obbs_gt = get_gt_obbs(batch, self.ve, T_wv)
+            # print(f"Ground truth objects found: {[len(o.remove_padding()) for o in obbs_gt]}")
+        except Exception as e:
+            print(f"Error getting ground truth objects: {e}")
+            return
+        
+        # # Check if there are any predictions
+        # print(f"Predicted objects found: {[len(o.remove_padding()) for o in obbs_pred]}")
+        
         precs, recs = [], []
-        for obbs_pred_s, obbs_gt_s in zip(obbs_pred, obbs_gt):
-            prec, rec, _ = prec_recall_bb3(
-                obbs_pred_s.remove_padding(),
-                obbs_gt_s.remove_padding(),
-                iou_thres=self.iou_thres,
-            )
-
-            if prec != -1.0 and rec != -1.0:
-                precs.append(prec)
-                recs.append(rec)
+        for i, (obbs_pred_s, obbs_gt_s) in enumerate(zip(obbs_pred, obbs_gt)):
+            # pred_count = len(obbs_pred_s.remove_padding())
+            # gt_count = len(obbs_gt_s.remove_padding())
+            # if pred_count == 0:
+            #     print(f"Sample {i}: No predictions, skipping")
+            #     continue
+                
+            # if gt_count == 0:
+            #     print(f"Sample {i}: No ground truth, skipping")
+            #     continue
+            try:
+                prec, rec, _ = prec_recall_bb3(
+                    obbs_pred_s.remove_padding(),
+                    obbs_gt_s.remove_padding(),
+                    iou_thres=self.iou_thres,
+                )
+                # print(f"Sample {i}: Precision={prec}, Recall={rec}")
+                
+                if prec != -1.0 and rec != -1.0:
+                    precs.append(prec)
+                    recs.append(rec)
+                # else:
+                    # print(f"Sample {i}: Invalid precision/recall values: {prec}, {rec}")
+                    
+            except Exception as e:
+                print(f"Error computing precision/recall for sample {i}: {e}")
+        
+        print(f"Total valid samples: {len(precs)}")
         self.metrics[f"precision@{self.iou_thres}"].extend(precs)
         self.metrics[f"recall@{self.iou_thres}"].extend(recs)
+        
+        # # Debug the current state of metrics
+        # for key in self.metrics:
+        #     print(f"Metric {key} now has {len(self.metrics[key])} values")
 
     def compute_metrics(self):
         metrics = {}
@@ -740,6 +807,10 @@ class EVLTrain(EVL):
         metrics["rgb"] = {}
         metrics["rgb"]["metrics"] = {}
         for key in self.metrics:
+            if len(self.metrics[key]) == 0:
+                # print(f"Metric {key} is empty, skipping.")
+                continue
             val = torch.tensor(self.metrics[key]).mean()
             metrics["rgb"]["metrics"][key] = val
+            print(f"Metric {key}: {val:.3f}")
         return metrics

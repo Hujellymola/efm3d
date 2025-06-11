@@ -22,6 +22,7 @@ torchrun --standalone --nproc_per_node=8 train.py
 # train with multi-node multi-gpu, run
 sbatch sbatch_run.sh
 """
+from calendar import c
 import gc
 import re
 import math
@@ -47,18 +48,19 @@ from efm3d.dataset.vrs_dataset import preprocess
 from efm3d.dataset.wds_dataset import get_tar_sample_num
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
+from itertools import islice, cycle
 import wandb
 import argparse
-from efm3d.utils.headless_viz import HeadlessVisualizer
+
 
 # ---------------------------- Configurations ------------------------------
-DATA_PATH = "./data/ase_train_10_seq"
-MAX_LR = 2e-4
+DATA_PATH = "/home/stud/bbo/projects/EFM3D/data/ase_train_10_seq/0"
+MAX_LR = 1e-5
 MIN_LR = MAX_LR * 0.1
-BATCH_SIZE = 4
-MAX_EPOCHS = 40
-MAX_SAMPLES_PER_EPOCH = 100000
-SAVE_EVERY_EPOCHS = 10  # save the model every
+BATCH_SIZE = 2
+MAX_EPOCHS = 600
+MAX_SAMPLES_PER_EPOCH = 99999
+SAVE_EVERY_EPOCHS = 200  # save the model every
 LOG_STEP = 5  # print error every
 
 # Wandb configuration
@@ -109,11 +111,11 @@ def get_dataloader(
         epoch_sample_ratio > 0 and epoch_sample_ratio <= 1.0
     ), f"{epoch_sample_ratio} is the ratio ([0, 1]) of samples used in each epoch"
 
-    tar_yaml = os.path.join(data_path, tar_yaml)
-    with open(tar_yaml, "r") as f:
-        tar_list = yaml.safe_load(f)["tars"]
+    # # Directly use the 4 shards from the sequence 0
+    tar_list = ["shards-0000.tar", "shards-0001.tar", "shards-0002.tar", "shards-0003.tar"]
+    # tar_list = ["shards-0000.tar"]
     tar_list = [os.path.join(data_path, tar_name) for tar_name in tar_list]
-
+    
     # check existence
     for tar in tar_list:
         assert os.path.exists(tar), f"{tar} not exists"
@@ -124,7 +126,7 @@ def get_dataloader(
         batch_size=batch_size,
         collation_fn=custom_collate_fn,
     )
-
+    ####
     samples_per_tar = get_tar_sample_num(tar_list[0])
     dataset_size = len(tar_list) * samples_per_tar
     dataset_size = min(dataset_size, max_samples_per_epoch)
@@ -139,8 +141,10 @@ def get_dataloader(
         batch_size=None,
         shuffle=False,
     )
-    dataloader = dataloader.with_epoch(batches_per_epoch)
-    dataloader = dataloader.with_length(batches_per_epoch)
+    # total_samples = int(max_samples_per_epoch * epoch_sample_ratio)
+    # num_batches = total_samples // (batch_size * world_size)
+    dataloader = dataloader.with_epoch(batches_per_epoch).with_length(batches_per_epoch)
+    print(f"Overfitting setup: forcing {batches_per_epoch} batches per epoch, batch_size={batch_size}")
 
     return dataloader
 
@@ -225,8 +229,9 @@ val_dataloader = get_dataloader(
     DATA_PATH,
     BATCH_SIZE,
     DDP_WORLD_SIZE,
-    max_samples_per_epoch=MAX_SAMPLES_PER_EPOCH,
-    tar_yaml="val_tars.yaml",
+    max_samples_per_epoch=4,
+    # tar_yaml="val_tars.yaml",
+    tar_yaml="train_tars.yaml",  # Use the same tar files for validation
 )
 
 color_jitter = ColorJitter(
@@ -239,19 +244,20 @@ color_jitter = ColorJitter(
 )
 point_drop = PointDropSimple(max_dropout_rate=0.8)
 point_jitter = PointJitter(depth_std_scale_min=1.0, depth_std_scale_max=6.0)
-augmentations = [color_jitter, point_drop, point_jitter]
+# augmentations = [color_jitter, point_drop, point_jitter]
+augmentations = [] # No augmentations
 
 # ---------------------------- Wandb Setup ------------------------------
 if master_process:
-    exp_name = f"efm3d_train_b{BATCH_SIZE}g{DDP_WORLD_SIZE}e{MAX_EPOCHS}lr{str(MAX_LR)}_{datetime.fromtimestamp(time.time()).strftime('%y-%m-%d-%H-%M-%S')}"
+    exp_name = f"efm3d_train_seq0_overfit_b{BATCH_SIZE}g{DDP_WORLD_SIZE}e{MAX_EPOCHS}lr{str(MAX_LR)}_{datetime.fromtimestamp(time.time()).strftime('%y-%m-%d-%H-%M-%S')}"
     # log_dir = os.path.join("wandb_logs", exp_name)
-    log_dir = "train_logs"
+    log_dir = "wandb_logs/overfit_seq0"
     os.makedirs(log_dir, exist_ok=True)
     
     # Initialize wandb
     wandb.login(key=WANDB_API_KEY)
     wandb.init(
-        project="efm3d-training",
+        project="efm3d-training-overfit",
         entity=ENTITY_NAME,
         name=exp_name,
         config={
@@ -259,16 +265,31 @@ if master_process:
             "world_size": DDP_WORLD_SIZE,
             "epochs": MAX_EPOCHS,
             "max_lr": MAX_LR,
-            "min_lr": MIN_LR,
+            # "min_lr": MIN_LR,
             "data_path": DATA_PATH,
             "max_samples_per_epoch": MAX_SAMPLES_PER_EPOCH,
             "save_every_epochs": SAVE_EVERY_EPOCHS,
         },
         dir=log_dir
     )
-    
-    # Initialize headless visualizer for 3D visuals
-    headless_visualizer = HeadlessVisualizer()
+
+# # print the sample id in the first 3 batches
+# if master_process:
+#     print("Sample IDs in the first 3 batches:")
+#     for i, batch in enumerate(islice(train_dataloader, 3)):
+#         if "rgb/frame_id_in_sequence" in batch:
+#             try:
+#                 print("rgb/frame_id_in_sequence", batch["rgb/frame_id_in_sequence"])
+#             except Exception as e:
+#                 print(f"Error printing frame_id_in_sequence: {e}")
+#         else:
+#             print("⚠️ No rgb/frame_id_in_sequence in batch")
+#         if "rgb/img/time_ns" in batch:
+#             try:
+#                 print("rgb/img/time_ns", batch["rgb/img/time_ns"])
+#             except Exception as e:
+#                 print(f"Error printing time_ns: {e}")
+            
 
 # ---------------------------- Training Loop ------------------------------
 # main loop
@@ -286,17 +307,16 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
     for batch in tqdm.tqdm(train_dataloader):
         start = time.time()
         optimizer.zero_grad()
-
         batch = preprocess(batch, device, aug_funcs=augmentations)
         output = model(batch)
         losses, total_loss = raw_model.compute_losses(output, batch)
-
         total_loss.backward()
 
         # epoch-based lr scheduler
-        lr = get_lr(
-            epoch, warmup_its=5, max_its=MAX_EPOCHS, max_lr=MAX_LR, min_lr=MIN_LR
-        )
+        # lr = get_lr(
+        #     epoch, warmup_its=5, max_its=MAX_EPOCHS, max_lr=MAX_LR, min_lr=MIN_LR
+        # )
+        lr = MAX_LR  # constant learning rate
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
@@ -330,7 +350,7 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
             wandb.log(log_dict, step=step)
 
             # log images (log every `10xlog_step` since writing video is slow)
-            if step % (210 * LOG_STEP) == 0:
+            if step % (480 * LOG_STEP) == 0:
                 try:
                     # Try using the original visualization but catch any OpenGL errors
                     imgs = raw_model.log_single(batch, output, batch_idx=0)
@@ -346,23 +366,9 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
                             wandb.log({f"train/image/{k}": wandb.Image(v)}, step=step)
                 except Exception as e:
                     print(f"OpenGL visualization failed: {e}")
-                    # Use headless visualizer as fallback
-                    try:
-                        imgs = headless_visualizer.log_single(batch, output, batch_idx=0)
-                        for k, v in imgs.items():
-                            if v.ndim == 4:  # video
-                                wandb.log({f"train/headless/{k}": wandb.Video(
-                                    v.transpose((0, 3, 1, 2)), 
-                                    fps=10, 
-                                    format="mp4"
-                                )}, step=step)
-                            elif v.ndim == 3:  # image
-                                wandb.log({f"train/headless/{k}": wandb.Image(v)}, step=step)
-                    except Exception as vis_e:
-                        print(f"Headless visualization also failed: {vis_e}")
         step += 1
 
-    # val =========================================
+    # # val =========================================
     model.eval()
     raw_model.reset_metrics()  # reset metrics for each epoch
     for batch in tqdm.tqdm(val_dataloader):
@@ -400,7 +406,7 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
                 wandb.log(log_dict, step=step)
 
             # log images
-            if val_step % (10 * LOG_STEP) == 0:
+            if val_step % (160 * LOG_STEP) == 0:
                 try:
                     # Try using the original visualization but catch any OpenGL errors
                     imgs = raw_model.log_single(batch, output, batch_idx=0)
@@ -416,20 +422,6 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
                             wandb.log({f"val/image/{k}": wandb.Image(v)}, step=step)
                 except Exception as e:
                     print(f"OpenGL visualization failed: {e}")
-                    # Use headless visualizer as fallback
-                    try:
-                        imgs = headless_visualizer.log_single(batch, output, batch_idx=0)
-                        for k, v in imgs.items():
-                            if v.ndim == 4:  # video
-                                wandb.log({f"val/headless/{k}": wandb.Video(
-                                    v.transpose((0, 3, 1, 2)),
-                                    fps=10,
-                                    format="mp4"
-                                )}, step=step)
-                            elif v.ndim == 3:  # image
-                                wandb.log({f"val/headless/{k}": wandb.Image(v)}, step=step)
-                    except Exception as vis_e:
-                        print(f"Headless visualization also failed: {vis_e}")
         step += 1
         val_step += 1
     # record epoch loss at end of epoch
@@ -446,7 +438,7 @@ for epoch in range(starting_epoch, MAX_EPOCHS):
     # save model
     if master_process and (epoch + 1) % SAVE_EVERY_EPOCHS == 0:
         ckpt_path = os.path.join(
-            log_dir, f"model_e{epoch}s{step}vs{val_step}_l{total_loss.item():.02f}.pth"
+            log_dir, f"model_overfit_e{epoch}s{step}vs{val_step}_l{total_loss.item():.02f}.pth"
         )
         last_ckpt_path = os.path.join(log_dir, "last.pth")
         torch.save(
