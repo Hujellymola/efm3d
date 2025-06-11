@@ -39,8 +39,8 @@ def get_gt_mesh_ply(data_path):
     else:
         seq_name = os.path.basename(data_path.strip("/"))
 
-    adt_mesh_ply = f"./data/adt_mesh/{seq_name}/gt_mesh.ply"
-    ase_mesh_ply = f"./data/ase_mesh/scene_ply_{seq_name}.ply"
+    adt_mesh_ply = f"/home/stud/bbo/projects/EFM3D/data/adt_mesh/{seq_name}/gt_mesh.ply"
+    ase_mesh_ply = f"/home/stud/bbo/projects/EFM3D/data/ase_mesh/scene_ply_{seq_name}.ply"
     if os.path.exists(adt_mesh_ply):
         return adt_mesh_ply
     elif os.path.exists(ase_mesh_ply):
@@ -98,16 +98,16 @@ def create_streamer(data_path, snippet_length_s, stride_length_s, max_snip):
         )
 
         # (optional) use the ATEK data loader If it is installed
-        # from efm3d.dataset.atek_vrs_dataset import create_atek_raw_data_loader_from_vrs_path
-        # streamer = create_atek_raw_data_loader_from_vrs_path(
-        #     vrs_path=data_path,
-        #     freq_hz=10,
-        #     snippet_length_s=snippet_length_s,
-        #     stride_length_s=stride_length_s,
-        #     skip_begin_seconds=20.0,
-        #     skip_end_seconds=5.0,
-        #     max_snippets=max_snip,
-        # )
+        from efm3d.dataset.atek_vrs_dataset import create_atek_raw_data_loader_from_vrs_path
+        streamer = create_atek_raw_data_loader_from_vrs_path(
+            vrs_path=data_path,
+            freq_hz=10,
+            snippet_length_s=snippet_length_s,
+            stride_length_s=stride_length_s,
+            skip_begin_seconds=20.0,
+            skip_end_seconds=5.0,
+            max_snippets=max_snip,
+        )
     else:
         print(
             f"Input error {data_path}, expect the input to be a folder to WDS tars or a .vrs file"
