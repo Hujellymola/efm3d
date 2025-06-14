@@ -713,41 +713,11 @@ class EVLTrain(EVL):
         self.metrics["mesh/comp"] = []
         self.metrics["mesh/prec"] = []
         self.metrics["mesh/recall"] = []
-
-    # def update_metrics(self, outputs, batch):
-    #     # don't compute metrics on training since it takes long to compute.
-    #     if self.training:
-    #         return
-    #     print("Updating metrics...")
-    #     obbs_pred = outputs[ARIA_OBB_PRED]
-    #     T_wv = outputs["voxel/T_world_voxel"]
-    #     obbs_gt = get_gt_obbs(batch, self.ve, T_wv)
-    #     precs, recs = [], []
-    #     for obbs_pred_s, obbs_gt_s in zip(obbs_pred, obbs_gt):
-    #         prec, rec, _ = prec_recall_bb3(
-    #             obbs_pred_s.remove_padding(),
-    #             obbs_gt_s.remove_padding(),
-    #             iou_thres=self.iou_thres,
-    #         )
-
-    #         if prec != -1.0 and rec != -1.0:
-    #             precs.append(prec)
-    #             recs.append(rec)
-    #     self.metrics[f"precision@{self.iou_thres}"].extend(precs)
-    #     self.metrics[f"recall@{self.iou_thres}"].extend(recs)
     
     def update_metrics(self, outputs, batch):
         # don't compute metrics on training since it takes long to compute.
         if self.training:
             return
-        # print("Updating metrics...")
-        # # Check if required keys exist in outputs
-        # if ARIA_OBB_PRED not in outputs:
-        #     print(f"Warning: {ARIA_OBB_PRED} not in outputs. Keys: {list(outputs.keys())}")
-        #     return 
-        # if "voxel/T_world_voxel" not in outputs:
-        #     print("Warning: voxel/T_world_voxel not in outputs")
-        #     return
         
         obbs_pred = outputs[ARIA_OBB_PRED]
         T_wv = outputs["voxel/T_world_voxel"]
@@ -765,15 +735,6 @@ class EVLTrain(EVL):
         
         precs, recs = [], []
         for i, (obbs_pred_s, obbs_gt_s) in enumerate(zip(obbs_pred, obbs_gt)):
-            # pred_count = len(obbs_pred_s.remove_padding())
-            # gt_count = len(obbs_gt_s.remove_padding())
-            # if pred_count == 0:
-            #     print(f"Sample {i}: No predictions, skipping")
-            #     continue
-                
-            # if gt_count == 0:
-            #     print(f"Sample {i}: No ground truth, skipping")
-            #     continue
             try:
                 prec, rec, _ = prec_recall_bb3(
                     obbs_pred_s.remove_padding(),
@@ -794,10 +755,6 @@ class EVLTrain(EVL):
         print(f"Total valid samples: {len(precs)}")
         self.metrics[f"precision@{self.iou_thres}"].extend(precs)
         self.metrics[f"recall@{self.iou_thres}"].extend(recs)
-        
-        # # Debug the current state of metrics
-        # for key in self.metrics:
-        #     print(f"Metric {key} now has {len(self.metrics[key])} values")
 
     def compute_metrics(self):
         metrics = {}

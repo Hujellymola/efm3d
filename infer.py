@@ -22,7 +22,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run EVL model inference on Aria sequences"
     )
-    parser.add_argument("--input", type=str, required=True, help="input data")
+    # path/to/vrs_file ,or path/to/sequence_name_dir_that_contains_wds_tars
+    parser.add_argument(
+        "--input", 
+        type=str, 
+        default="/home/stud/bbo/projects/EFM3D/data/ase_eval/81022",
+        help="input data"
+    )
     parser.add_argument(
         "--model_ckpt",
         type=str,
