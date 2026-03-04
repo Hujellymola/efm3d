@@ -68,7 +68,9 @@ def compute_avg_metrics(paths):
     return avg_ret
 
 
-def create_streamer(data_path, snippet_length_s, stride_length_s, max_snip):
+def create_streamer(
+    data_path, snippet_length_s, stride_length_s, max_snip, skip_snips=0
+):
     # infer data type
     def is_atek_wds_input(data_path):
         ATEK_WDS_TAR = "shards-0000.tar"
@@ -94,6 +96,7 @@ def create_streamer(data_path, snippet_length_s, stride_length_s, max_snip):
             snippet_length_s=snippet_length_s,
             stride_length_s=stride_length_s,
             max_snippets=max_snip,
+            skip_snippets=skip_snips,
             preprocess=preprocess_inference,
         )
 
@@ -141,6 +144,7 @@ def run_one(
     output_dir="./output",
     obb_only=False,
     skip_video=False,
+    skip_snips=0,
 ):
     output_dir = create_output_dir(output_dir, model_ckpt, data_path)
 
@@ -162,7 +166,11 @@ def run_one(
 
     # create dataset
     streamer = create_streamer(
-        data_path, snippet_length_s=1.0, stride_length_s=snip_stride, max_snip=max_snip
+        data_path,
+        snippet_length_s=1.0,
+        stride_length_s=snip_stride,
+        max_snip=max_snip,
+        skip_snips=skip_snips,
     )
 
     # per-snippet inference
@@ -239,6 +247,7 @@ def run_one(
             snippet_length_s=1.0,
             stride_length_s=1.0,
             max_snip=math.ceil((max_snip - 1) * snip_stride),
+            skip_snips=int(skip_snips * snip_stride),
         )
         if vol_fusion is not None:
             vol_fusion.reinit()

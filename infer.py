@@ -70,6 +70,12 @@ if __name__ == "__main__":
         action="store_true",
         help="skip video generation",
     )
+    parser.add_argument(
+        "--skip_snips",
+        type=int,
+        default=0,
+        help="skip the first N snippets",
+    )
     args = parser.parse_args()
 
     run_one(
@@ -82,4 +88,5 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         obb_only=args.obb_only,
         skip_video=args.skip_video,
+        skip_snips=args.skip_snips,
     )

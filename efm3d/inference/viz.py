@@ -69,6 +69,8 @@ def fill_obbs_to_snippet(obbs, rgb_ts, T_ws):
     for ts in rgb_ts:
         if ts in obbs:
             obbs_out.append(obbs[ts].add_padding(128))
+        elif len(obbs_ts) == 0:
+            obbs_out.append(ObbTW().add_padding(128))
         else:
             # find the nearest timestamp within 1s
             nidx = find_nearest(obbs_ts, ts)

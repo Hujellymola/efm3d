@@ -75,7 +75,10 @@ def is_adt(vrs_path):
     # get folder name
     if vrs_path.endswith(".vrs"):
         vrs_path = os.path.split(vrs_path)[0]
-    return os.path.exists(os.path.join(vrs_path, "aria_trajectory.csv"))
+    if os.path.exists(os.path.join(vrs_path, "aria_trajectory.csv")):
+        return True
+    folder_name = os.path.basename(vrs_path)
+    return "optitrack_release_work_seq" in folder_name
 
 
 def is_aeo(vrs_path):
@@ -286,6 +289,7 @@ class VrsSequenceDataset(Dataset):
         snippet_length_s,
         stride_length_s,
         max_snippets=9999,
+        skip_snippets=0,
         preprocess=None,
     ):
         self.frame_rate = frame_rate
@@ -326,8 +330,7 @@ class VrsSequenceDataset(Dataset):
 
         # Add obbs GT if available
         self.obs = None
-        if not self.is_adt:
-            self.obs = self.load_objects()
+        self.obs = self.load_objects()
         if self.obs is not None:
             obb_freq = int(1.0 / (1e-9 * (self.obb_times[1] - self.obb_times[0])))
             obb_subsample = max(1, int(obb_freq / frame_rate))
@@ -356,6 +359,9 @@ class VrsSequenceDataset(Dataset):
             self.snippet_times.append((snip_start, snip_end))
             snip_start += stride_length_s * 1e9
             snip_end = snip_start + snippet_length_s * 1e9
+
+        if skip_snippets > 0:
+            self.snippet_times = self.snippet_times[skip_snippets:]
 
     def load_objects(self):
         self.obs = load_obbs_gt(
@@ -544,6 +550,12 @@ class VrsSequenceDataset(Dataset):
             subsample=subsample,
         )
         if timed_Ts_world_rig is not None:
+            if self.is_adt:
+                T_vio_gravity = get_transform_to_vio_gravity_convention(
+                    GRAVITY_DIRECTION_ADT
+                ).double()
+                for k, T_wr in timed_Ts_world_rig.items():
+                    timed_Ts_world_rig[k] = T_vio_gravity @ T_wr
             return timed_Ts_world_rig
 
         # Other sequences
