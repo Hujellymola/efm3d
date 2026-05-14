@@ -83,7 +83,10 @@ def iou_3d_loss(obbs_pr, obbs_gt, cent_pr, cent_gt, valid_gt):
 
     # weighted by validness and GT centerness
     obbs_weight = cent_gt.reshape(-1) * valid_gt.reshape(-1)
-    valid_idx = torch.nonzero(obbs_weight > 0).squeeze()
+    valid_idx = torch.nonzero(obbs_weight > 0, as_tuple=True)[0]
+    if valid_idx.numel() == 0:
+        return cent_pr.sum() * 0.0
+
     obbs_weight = obbs_weight[valid_idx]
     obbs_pr_7d = obbs_pr_7d[valid_idx, :]
     obbs_gt_7d = obbs_gt_7d[valid_idx, :]

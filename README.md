@@ -160,6 +160,138 @@ sbatch sbatch_run.sh
 
 By default the tensorboard log is saved to `${EFM3D_DIR}/tb_logs`.
 
+### Subset Training and Monitoring
+
+The local `train.py` in this workspace is configured for a monitorable ASE
+subset run:
+
+- train sequences: `0, 90, 91, 92, 94, 95, 96, 97, 98`
+- eval sequence: `9`
+- `BATCH_SIZE = 1`, `MAX_EPOCHS = 10`, `MAX_SAMPLES_PER_EPOCH = None`
+- WandB project: `efm3d`
+- TensorBoard logs and checkpoints: `tb_logs/<experiment>/`
+- terminal logs and local WandB files: `tb_logs/run_logs/` and `tb_logs/wandb/`
+- mini-eval every epoch, with local `video.mp4` and `fused_mesh.ply` outputs
+
+Run these checks before starting a long run:
+
+```bash
+cd /research/repos/efm3d
+
+/research/envs/efm3d/bin/python -m py_compile train.py efm3d/dataset/augmentation.py
+git diff --check -- train.py efm3d/dataset/augmentation.py
+
+/research/envs/efm3d/bin/python - <<'PY'
+import moviepy, moviepy.editor as mpy, wandb
+print("moviepy", moviepy.__version__)
+print("moviepy.editor ok", mpy.ImageSequenceClip)
+print("wandb", wandb.__version__)
+PY
+
+test -n "$WANDB_API_KEY" || echo "WANDB_API_KEY is not set"
+nvidia-smi
+```
+
+Start the run in `tmux` so it keeps running if the terminal disconnects:
+
+```bash
+tmux new -s efm3d_train
+```
+
+Inside the `tmux` session, launch training:
+
+```bash
+cd /research/repos/efm3d
+mkdir -p tb_logs/run_logs tb_logs/wandb
+
+test -n "$WANDB_API_KEY" || echo "WANDB_API_KEY is not set inside tmux"
+RUN_TAG=efm3d_subset_b1_10ep_$(date +%Y%m%d_%H%M%S)
+
+set -o pipefail
+CUDA_VISIBLE_DEVICES=0 \
+WANDB_MODE=online \
+WANDB_DIR=tb_logs/wandb \
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+/research/envs/efm3d/bin/python train.py 2>&1 | tee tb_logs/run_logs/${RUN_TAG}.log
+```
+
+Detach from `tmux` with `Ctrl-b`, then `d`. Reattach later with:
+
+```bash
+tmux attach -t efm3d_train
+```
+
+Monitor terminal output and GPU memory from another shell:
+
+```bash
+cd /research/repos/efm3d
+LOG_FILE=$(ls -t tb_logs/run_logs/efm3d_subset_*.log | head -1)
+echo "$LOG_FILE"
+tail -f "$LOG_FILE"
+watch -n 5 nvidia-smi
+```
+
+Run TensorBoard locally:
+
+```bash
+cd /research/repos/efm3d
+/research/envs/efm3d/bin/tensorboard --logdir tb_logs --port 6006
+```
+
+Open:
+
+```text
+http://localhost:6006
+```
+
+If TensorBoard runs on a remote machine, forward the port from your local
+machine:
+
+```bash
+ssh -L 6006:localhost:6006 <user>@<host>
+```
+
+Inspect the newest experiment directory:
+
+```bash
+cd /research/repos/efm3d
+EXP_DIR=$(ls -td tb_logs/efm3d_train_* | head -1)
+echo "$EXP_DIR"
+find "$EXP_DIR/mini_eval" -name video.mp4 -o -name fused_mesh.ply
+ls -lh "$EXP_DIR"/last.pth "$EXP_DIR"/model_*.pth
+```
+
+The per-epoch qualitative outputs are expected under:
+
+```text
+$EXP_DIR/mini_eval/epoch_XXXX/9/video.mp4
+$EXP_DIR/mini_eval/epoch_XXXX/9/fused_mesh.ply
+```
+
+WandB logs the scalar curves, snippet videos, mini-eval video, and mesh counts.
+The `.ply` mesh files stay local and are not uploaded to WandB. The repo-local
+`tb_logs/` directory is ignored by git, so these run artifacts stay out of
+commits while remaining easy to inspect from the repo root.
+
+If VS Code cannot preview `video.mp4`, use VLC/mpv or transcode to H.264:
+
+```bash
+ffmpeg -y -i "$EXP_DIR/mini_eval/epoch_0000/9/video.mp4" \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
+  "$EXP_DIR/mini_eval/epoch_0000/9/video_h264.mp4"
+```
+
+Use `BATCH_SIZE = 1` for the first stable run on a 24GB RTX 4090. A previous
+`BATCH_SIZE = 2` attempt ran out of memory even when the GPU was mostly free.
+Gradient accumulation can be added later to mimic a larger optimizer batch, but
+it does not reduce activation memory and should not be treated as an OOM fix.
+
+WandB and TensorBoard are partly duplicate because both receive loss curves and
+videos. Keep both for this first monitored run: use WandB as the primary online
+dashboard for run comparison and use TensorBoard as the local fallback/debug
+view. Once the training flow is stable, it is reasonable to keep WandB as the
+single primary tracker and reduce or remove TensorBoard video logging.
+
 ## EFM3D benchmark
 
 Please see [benchmark.md](benchmark.md) for details.

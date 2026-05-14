@@ -57,11 +57,12 @@ from torch.utils.tensorboard import SummaryWriter
 DATA_PATH = "./data/ase_train"
 MAX_LR = 2e-4
 MIN_LR = MAX_LR * 0.1
-BATCH_SIZE = 2
-MAX_EPOCHS = 20
+BATCH_SIZE = 1
+MAX_EPOCHS = 10
 MAX_SAMPLES_PER_EPOCH = None  # Set to an int for smoke tests.
-SAVE_EVERY_EPOCHS = 5  # save the model every
+SAVE_EVERY_EPOCHS = 1  # save the model every
 LOG_STEP = 5  # print error every
+VIDEO_LOG_STEP = 500  # log qualitative snippet videos every this many steps
 
 USE_WANDB = True
 WANDB_PROJECT = "efm3d"
@@ -206,7 +207,19 @@ def flatten_losses(prefix, losses):
 
 
 def wandb_video(frames, fps=10):
-    return wandb.Video(frames.astype("uint8"), fps=fps, format="mp4")
+    shape = getattr(frames, "shape", None)
+    if getattr(frames, "ndim", None) != 4:
+        raise ValueError(f"Expected video frames shaped T,H,W,C; got {shape}")
+    channels = frames.shape[-1]
+    if channels not in (1, 3, 4):
+        raise ValueError(
+            f"Expected 1, 3, or 4 channels in T,H,W,C video; got {channels}"
+        )
+    frames = frames.astype("uint8", copy=False)
+    if channels == 4:
+        frames = frames[..., :3]
+    frames = frames.transpose((0, 3, 1, 2))
+    return wandb.Video(frames, fps=fps, format="mp4")
 
 
 def log_wandb_scalars(prefix, losses, total_loss, step_value, epoch, extra=None):
@@ -488,17 +501,23 @@ augmentations = [color_jitter, point_drop, point_jitter]
 
 step = 0
 val_step = 0
+last_val_loss_item = float("nan")
 # main loop
 for epoch in range(MAX_EPOCHS):
     # train
     model.train()
     for batch in tqdm.tqdm(train_dataloader):
         start = time.time()
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         batch = preprocess(batch, device, aug_funcs=augmentations)
         output = model(batch)
         losses, total_loss = raw_model.compute_losses(output, batch)
+        if not torch.isfinite(total_loss):
+            raise RuntimeError(
+                f"Non-finite train total_loss at epoch {epoch}, step {step}: "
+                f"{total_loss.item()}"
+            )
 
         total_loss.backward()
 
@@ -546,13 +565,16 @@ for epoch in range(MAX_EPOCHS):
                 },
             )
 
-            # log images (log every `10xlog_step` since writing video is slow)
-            if step % (10 * LOG_STEP) == 0:
+            # log images
+            if step % VIDEO_LOG_STEP == 0:
                 imgs = raw_model.log_single(batch, output, batch_idx=0)
+                vid = None
                 for k, v in imgs.items():
                     vid = torch.tensor(v.transpose((0, 3, 1, 2))).unsqueeze(0)
                     writer.add_video(f"train/{k}", vid, global_step=step, fps=10)
                 log_wandb_videos("train", imgs, step, epoch)
+                del imgs, vid
+        del batch, output, losses, total_loss
         step += 1
 
     # val
@@ -560,11 +582,17 @@ for epoch in range(MAX_EPOCHS):
     for batch in tqdm.tqdm(val_dataloader):
         with torch.no_grad():
             start = time.time()
-            batch = preprocess(batch, device, aug_funcs=augmentations)
+            batch = preprocess(batch, device, aug_funcs=None)
             output = model(batch)
             losses, total_loss = raw_model.compute_losses(output, batch)
+            if not torch.isfinite(total_loss):
+                raise RuntimeError(
+                    f"Non-finite val total_loss at epoch {epoch}, "
+                    f"val_step {val_step}: {total_loss.item()}"
+                )
             if ddp:
                 dist.all_reduce(total_loss, op=dist.ReduceOp.AVG)
+            last_val_loss_item = total_loss.item()
             time_per_it = time.time() - start
 
         if master_process and val_step % LOG_STEP == 0:
@@ -593,18 +621,21 @@ for epoch in range(MAX_EPOCHS):
                 )
 
             # log images
-            if val_step % (10 * LOG_STEP) == 0:
+            if val_step % VIDEO_LOG_STEP == 0:
                 imgs = raw_model.log_single(batch, output, batch_idx=0)
+                vid = None
                 for k, v in imgs.items():
                     vid = torch.tensor(v.transpose((0, 3, 1, 2))).unsqueeze(0)
                     writer.add_video(f"val/{k}", vid, global_step=val_step, fps=10)
                 log_wandb_videos("val", imgs, val_step, epoch)
+                del imgs, vid
+        del batch, output, losses, total_loss
         val_step += 1
 
     # save model
     if master_process and (epoch + 1) % SAVE_EVERY_EPOCHS == 0:
         ckpt_path = os.path.join(
-            log_dir, f"model_e{epoch}s{step}_l{total_loss.item():.02f}.pth"
+            log_dir, f"model_e{epoch}s{step}_l{last_val_loss_item:.02f}.pth"
         )
         last_ckpt_path = os.path.join(log_dir, "last.pth")
         torch.save(
