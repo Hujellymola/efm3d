@@ -183,10 +183,9 @@ class PointDropSimple:
         if dropout_rate > self.max_dropout_rate:
             return batch
         else:
-            p_w = batch[ARIA_POINTS_WORLD]  # B, T, 3
-            T, N = p_w.shape[:2]
-            mask = torch.rand((T, N)) < dropout_rate
-            p_w[mask, :] = torch.nan
+            p_w = batch[ARIA_POINTS_WORLD]  # B, T, N, 3
+            mask = torch.rand(p_w.shape[:-1], device=p_w.device) < dropout_rate
+            p_w[mask] = torch.nan
             batch[ARIA_POINTS_WORLD] = p_w
 
         return batch
